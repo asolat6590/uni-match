@@ -12,6 +12,8 @@ import {
   Linkedin,
   ListChecks,
   Loader2,
+  Lock,
+  LogOut,
   Mail,
   MapPin,
   Menu,
@@ -27,6 +29,11 @@ import {
 } from "lucide-react";
 import { copy, heroImage, imageForUniversity, navItems, sectionIds, universities } from "./data.js";
 import { catalogFit, loadSaved, storeSaved } from "./fit.js";
+import { apiFetch } from "./components/workspace/api.js";
+import AuthModal from "./components/workspace/AuthModal.jsx";
+import NotificationBell from "./components/workspace/NotificationBell.jsx";
+import WorkspaceShell from "./components/workspace/WorkspaceShell.jsx";
+import Reveal from "./components/Reveal.jsx";
 
 const emptyForm = {
   name: "",
@@ -99,7 +106,65 @@ export default function App() {
   const [checklist, setChecklist] = useState(null);
   const [busy, setBusy] = useState("");
   const [extraError, setExtraError] = useState("");
+  const [user, setUser] = useState(null);
+  const [authMode, setAuthMode] = useState(null);
+  const [pendingCheckout, setPendingCheckout] = useState(false);
+  const [viewMode, setViewMode] = useState("landing");
+  const [workspaceTab, setWorkspaceTab] = useState("dashboard");
+  const [freeUsed, setFreeUsed] = useState(() => Number(localStorage.getItem("unimatch_free_matches") || "0"));
+  const [checkoutStatus, setCheckoutStatus] = useState("idle");
+  const [checkoutError, setCheckoutError] = useState("");
+  const isPro = Boolean(user?.isPremium);
   const text = copy[lang];
+
+  useEffect(() => {
+    apiFetch("/api/billing/status")
+      .then((data) => {
+        if (data?.user) setUser(data.user);
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const state = params.get("checkout");
+    const sessionId = params.get("session_id");
+    if (!state) return;
+
+    const cleanUrl = `${window.location.pathname}${window.location.hash || ""}`;
+
+    if (state === "cancelled") {
+      setCheckoutStatus("cancelled");
+      window.history.replaceState({}, "", cleanUrl);
+      requestAnimationFrame(() => scrollToId("pricing"));
+      return;
+    }
+
+    if (state === "success" && sessionId) {
+      let active = true;
+      setCheckoutStatus("verifying");
+      apiFetch(`/api/checkout-status?session_id=${encodeURIComponent(sessionId)}`)
+        .then((data) => {
+          if (!active) return;
+          if (data?.paid && data?.user) {
+            setUser(data.user);
+            setCheckoutStatus("success");
+          } else {
+            setCheckoutStatus("error");
+          }
+          window.history.replaceState({}, "", cleanUrl);
+          requestAnimationFrame(() => scrollToId("pricing"));
+        })
+        .catch(() => {
+          if (!active) return;
+          setCheckoutStatus("error");
+          window.history.replaceState({}, "", cleanUrl);
+        });
+      return () => {
+        active = false;
+      };
+    }
+  }, []);
 
   useEffect(() => {
     storeSaved(saved);
@@ -114,7 +179,18 @@ export default function App() {
 
   function go(id) {
     setMenuOpen(false);
+    if (viewMode !== "landing") {
+      setViewMode("landing");
+      requestAnimationFrame(() => scrollToId(id));
+      return;
+    }
     scrollToId(id);
+  }
+
+  async function logout() {
+    await apiFetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+    setUser(null);
+    setViewMode("landing");
   }
 
   function updateField(event) {
@@ -124,11 +200,20 @@ export default function App() {
 
   async function submitProfile(event) {
     event.preventDefault();
+    if (!isPro && freeUsed >= 1) {
+      setError(text.checkout.limitReached);
+      return;
+    }
     setStatus("loading");
     setError("");
     try {
       const data = await postMatch({ ...form, lang, action: "match" }, lang);
       setResult(data);
+      if (!isPro) {
+        const nextCount = freeUsed + 1;
+        localStorage.setItem("unimatch_free_matches", String(nextCount));
+        setFreeUsed(nextCount);
+      }
       setStatus("done");
       requestAnimationFrame(() => scrollToId("match"));
     } catch (err) {
@@ -137,10 +222,21 @@ export default function App() {
     }
   }
 
+  function requirePro(fn) {
+    if (!isPro) {
+      setExtraError(text.checkout.proOnlyFeature);
+      go("pricing");
+      return;
+    }
+    fn();
+  }
+
   function toggleSave(uni) {
-    const item = toSaved(uni, lang);
-    setSaved((current) => (current.some((entry) => entry.name === item.name) ? current.filter((entry) => entry.name !== item.name) : [item, ...current].slice(0, 12)));
-    setPicked((names) => names.filter((name) => name !== item.name));
+    requirePro(() => {
+      const item = toSaved(uni, lang);
+      setSaved((current) => (current.some((entry) => entry.name === item.name) ? current.filter((entry) => entry.name !== item.name) : [item, ...current].slice(0, 12)));
+      setPicked((names) => names.filter((name) => name !== item.name));
+    });
   }
 
   function togglePick(name) {
@@ -165,6 +261,10 @@ export default function App() {
   }
 
   async function refineList(kind) {
+    if (!isPro) {
+      requirePro(() => {});
+      return;
+    }
     if (!result?.universities?.length) return;
     const data = await runTask({ action: "refine", refine: kind, previous: result.universities }, kind);
     if (data?.universities) {
@@ -174,6 +274,10 @@ export default function App() {
   }
 
   async function compareSaved() {
+    if (!isPro) {
+      requirePro(() => {});
+      return;
+    }
     const selected = saved.filter((item) => picked.includes(item.name));
     if (selected.length < 2) {
       setExtraError(text.ai.compareHint);
@@ -184,6 +288,10 @@ export default function App() {
   }
 
   async function openChecklist(uni) {
+    if (!isPro) {
+      requirePro(() => {});
+      return;
+    }
     const data = await runTask({ action: "checklist", university: toSaved(uni, lang) }, `check:${uni.name}`);
     if (data?.title) setChecklist({ ...data, university: uni.name });
   }
@@ -216,6 +324,31 @@ export default function App() {
     URL.revokeObjectURL(link.href);
   }
 
+  async function startProCheckout() {
+    if (isPro) {
+      setViewMode("workspace");
+      setWorkspaceTab("dashboard");
+      return;
+    }
+    if (!user) {
+      setPendingCheckout(true);
+      setAuthMode("register");
+      return;
+    }
+    setCheckoutStatus("loading");
+    setCheckoutError("");
+    try {
+      const data = await apiFetch("/api/checkout", { method: "POST" });
+      if (!data.url) {
+        throw new Error(data.message || text.checkout.error);
+      }
+      window.location.href = data.url;
+    } catch (err) {
+      setCheckoutStatus("error");
+      setCheckoutError(err.message || text.checkout.error);
+    }
+  }
+
   return (
     <div className="min-h-screen bg-background text-foreground">
       <header className="fixed inset-x-0 top-0 z-40 border-b border-border/60 bg-background/85 backdrop-blur-xl">
@@ -225,6 +358,11 @@ export default function App() {
               <GraduationCap className="h-5 w-5" />
             </span>
             <span className="font-display text-lg font-bold tracking-tight">UniMatch</span>
+            {isPro && (
+              <span className="rounded-full bg-sky-accent px-2 py-0.5 text-[10px] font-bold tracking-wide text-brand">
+                {text.checkout.proBadge}
+              </span>
+            )}
           </button>
           <nav className="hidden items-center gap-7 lg:flex">
             {navItems.map((item) => (
@@ -251,6 +389,38 @@ export default function App() {
                 </button>
               ))}
             </div>
+            <NotificationBell
+              lang={lang}
+              isPremium={isPro}
+              onOpenDeadlines={() => {
+                setViewMode("workspace");
+                setWorkspaceTab("deadlines");
+              }}
+            />
+            <button
+              onClick={() => setViewMode((v) => (v === "workspace" ? "landing" : "workspace"))}
+              className="hidden rounded-full border border-border bg-card px-3.5 py-2 text-xs font-semibold hover:bg-secondary md:inline-flex"
+            >
+              {viewMode === "workspace"
+                ? lang === "en" ? "Landing" : "Главная"
+                : lang === "en" ? "Workspace" : "Кабинет"}
+            </button>
+            {user ? (
+              <button
+                onClick={logout}
+                title={user.email}
+                className="hidden items-center gap-1.5 rounded-full border border-border px-3 py-2 text-xs font-semibold text-muted-foreground hover:text-foreground md:inline-flex"
+              >
+                <LogOut className="h-3.5 w-3.5" /> {user.name.split(" ")[0]}
+              </button>
+            ) : (
+              <button
+                onClick={() => setAuthMode("login")}
+                className="hidden rounded-full border border-border px-3.5 py-2 text-xs font-semibold hover:bg-secondary md:inline-flex"
+              >
+                {lang === "en" ? "Sign in" : "Войти"}
+              </button>
+            )}
             <button
               onClick={() => go("match")}
               className="hidden rounded-full bg-brand px-4 py-2 text-sm font-semibold text-brand-foreground shadow-soft transition-transform hover:-translate-y-0.5 md:inline-flex"
@@ -279,7 +449,7 @@ export default function App() {
                 </button>
               ))}
             </div>
-            <div className="mt-3 flex items-center gap-3">
+            <div className="mt-3 flex flex-wrap items-center gap-2">
               <div className="flex items-center rounded-full border border-border p-0.5">
                 {["en", "ru"].map((code) => (
                   <button
@@ -294,6 +464,26 @@ export default function App() {
                 ))}
               </div>
               <button
+                onClick={() => {
+                  setMenuOpen(false);
+                  setViewMode((v) => (v === "workspace" ? "landing" : "workspace"));
+                }}
+                className="rounded-full border border-border px-3.5 py-2 text-xs font-semibold"
+              >
+                {viewMode === "workspace"
+                  ? lang === "en" ? "Landing" : "Главная"
+                  : lang === "en" ? "Workspace" : "Кабинет"}
+              </button>
+              {user ? (
+                <button onClick={() => { setMenuOpen(false); logout(); }} className="rounded-full border border-border px-3.5 py-2 text-xs font-semibold">
+                  {lang === "en" ? "Sign out" : "Выйти"}
+                </button>
+              ) : (
+                <button onClick={() => { setMenuOpen(false); setAuthMode("login"); }} className="rounded-full border border-border px-3.5 py-2 text-xs font-semibold">
+                  {lang === "en" ? "Sign in" : "Войти"}
+                </button>
+              )}
+              <button
                 onClick={() => go("match")}
                 className="flex-1 rounded-full bg-brand px-4 py-2.5 text-sm font-semibold text-brand-foreground"
               >
@@ -304,67 +494,135 @@ export default function App() {
         )}
       </header>
 
-      <section id="home" className="relative overflow-hidden bg-hero-gradient pt-28 pb-20 sm:pt-36 sm:pb-28">
-        <div className="mx-auto grid max-w-6xl items-center gap-12 px-4 sm:px-6 lg:grid-cols-2">
-          <div className="text-primary-foreground">
-            <span className="inline-flex items-center gap-2 rounded-full bg-primary-foreground/10 px-4 py-1.5 text-xs font-semibold uppercase tracking-wider text-sky-accent">
-              <Sparkles className="h-3.5 w-3.5" /> UniMatch
+      {viewMode === "workspace" ? (
+        <WorkspaceShell
+          lang={lang}
+          user={user}
+          activeTab={workspaceTab}
+          onTabChange={setWorkspaceTab}
+          onRequireAuth={() => setAuthMode("login")}
+          onStartCheckout={startProCheckout}
+          onBackToSite={() => setViewMode("landing")}
+        />
+      ) : (
+      <>
+      <section id="home" className="relative overflow-hidden bg-hero-gradient pt-28 pb-28 sm:pt-36 sm:pb-36">
+        <div className="pointer-events-none absolute -right-24 -top-24 h-96 w-96 rounded-full bg-[#499BED]/20 blur-3xl" />
+        <div className="pointer-events-none absolute -left-24 bottom-0 h-80 w-80 rounded-full bg-[#A1C6F6]/15 blur-3xl" />
+        <div className="relative mx-auto grid max-w-6xl items-center gap-12 px-4 sm:px-6 lg:grid-cols-2">
+          <Reveal className="text-primary-foreground">
+            <span className="inline-flex items-center gap-2 rounded-full border border-[#A1C6F6]/30 bg-white/10 px-4 py-1.5 text-xs font-semibold uppercase tracking-wider text-[#A1C6F6] backdrop-blur-sm">
+              <span className="h-1.5 w-1.5 rounded-full bg-[#499BED]" /> UniMatch · Global Admissions
             </span>
-            <h1 className="mt-5 text-4xl font-extrabold leading-tight sm:text-5xl lg:text-[3.4rem]">{text.heroTitle}</h1>
-            <p className="mt-5 max-w-xl text-lg text-primary-foreground/85">{text.heroSub}</p>
-            <p className="mt-3 max-w-xl text-sm text-primary-foreground/65">{text.heroDesc}</p>
+            <h1 className="mt-5 text-4xl font-extrabold leading-[1.08] sm:text-5xl lg:text-[3.5rem]">
+              {text.heroTitle.split(" ").slice(0, -1).join(" ")}{" "}
+              <span className="font-serif-italic text-[1.1em] font-normal text-[#A1C6F6]">
+                {text.heroTitle.split(" ").slice(-1)[0]}
+              </span>
+            </h1>
+            <p className="mt-5 max-w-xl text-lg text-[#DAEAFF]/90">{text.heroSub}</p>
+            <p className="mt-3 max-w-xl text-sm text-[#A1C6F6]/80">{text.heroDesc}</p>
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
               <button
                 onClick={() => go("match")}
-                className="inline-flex items-center justify-center gap-2 rounded-full bg-sky-accent px-6 py-3.5 text-sm font-semibold text-brand shadow-card transition-transform hover:-translate-y-0.5"
+                className="inline-flex items-center justify-center gap-3 rounded-full bg-white py-2.5 pl-6 pr-2.5 text-sm font-semibold text-[#031725] shadow-card transition-transform hover:-translate-y-0.5"
               >
-                {text.cta} <ArrowRight className="h-4 w-4" />
+                <span>{text.cta}</span>
+                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#022E5B] text-white">
+                  <ArrowRight className="h-4 w-4" />
+                </span>
               </button>
               <button
                 onClick={() => go("universities")}
-                className="inline-flex items-center justify-center gap-2 rounded-full border border-primary-foreground/30 px-6 py-3.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary-foreground/10"
+                className="inline-flex items-center justify-center gap-2 rounded-full border border-[#A1C6F6]/35 bg-white/5 px-6 py-3.5 text-sm font-semibold text-white backdrop-blur-sm transition-colors hover:bg-white/10"
               >
                 {text.browse}
               </button>
             </div>
-            <dl className="mt-10 grid max-w-lg grid-cols-3 gap-4">
-              {text.stats.map((item) => (
-                <div key={item.l} className="rounded-2xl bg-primary-foreground/10 px-4 py-3">
-                  <dt className="font-display text-xl font-bold text-primary-foreground">{item.v}</dt>
-                  <dd className="text-xs text-primary-foreground/70">{item.l}</dd>
-                </div>
-              ))}
-            </dl>
-          </div>
-          <div className="relative">
-            <div className="overflow-hidden rounded-[2rem] border border-primary-foreground/15 shadow-card">
-              <img src={heroImage} width="1280" height="1024" alt="International students on a university campus" className="h-full w-full object-cover" />
+          </Reveal>
+          <Reveal delay={140} className="relative">
+            <div className="overflow-hidden rounded-[2rem] border border-[#A1C6F6]/25 shadow-card">
+              <img src={heroImage} width="1280" height="1024" alt="International students on a university campus" className="h-full w-full object-cover transition-transform duration-700 hover:scale-[1.02]" />
             </div>
-            <div className="absolute -bottom-6 left-4 hidden rounded-2xl bg-background px-5 py-4 shadow-card sm:block">
-              <p className="text-xs text-muted-foreground">QS Top-100</p>
-              <p className="font-display text-sm font-bold">{text.heroBadge}</p>
+            <div className="absolute -bottom-5 left-5 hidden rounded-2xl border border-[#A1C6F6]/30 bg-[#031725]/80 px-5 py-4 text-white shadow-card backdrop-blur-md sm:block">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-[#A1C6F6]">QS Top-100 · Verified Data</p>
+              <p className="mt-0.5 font-display text-sm font-bold">{text.heroBadge}</p>
             </div>
-          </div>
+          </Reveal>
         </div>
       </section>
 
+      {/* Archio-inspired straddling 3-column stats bar */}
+      <div className="relative z-10 mx-auto -mt-12 max-w-4xl px-4 sm:px-6">
+        <Reveal>
+          <dl className="grid grid-cols-3 divide-x divide-border rounded-2xl border border-border bg-card shadow-card">
+            {text.stats.map((item, idx) => (
+              <div key={item.l} className="px-4 py-5 text-center sm:px-6 sm:py-6">
+                <p className="text-[11px] font-bold uppercase tracking-widest text-[#499BED]">0{idx + 1}</p>
+                <dt className="mt-1 font-display text-xl font-extrabold text-foreground sm:text-3xl">{item.v}</dt>
+                <dd className="mt-0.5 text-[11px] text-muted-foreground sm:text-xs">{item.l}</dd>
+              </div>
+            ))}
+          </dl>
+        </Reveal>
+      </div>
+
+      {/* Archio-inspired infinite marquee pill strip */}
+      <div className="mask-fade-x mx-auto mt-10 max-w-6xl overflow-hidden py-2">
+        <div className="animate-marquee gap-3">
+          {[
+            "Computer Science",
+            "Canada · Toronto & UBC",
+            "Verified Scholarships",
+            "United Kingdom · Sheffield",
+            "Data Science & AI",
+            "Germany · TUM Munich",
+            "Student Housing",
+            "Netherlands · UvA",
+            "Singapore · NUS",
+            "Australia · Melbourne",
+            "Computer Science",
+            "Canada · Toronto & UBC",
+            "Verified Scholarships",
+            "United Kingdom · Sheffield",
+            "Data Science & AI",
+            "Germany · TUM Munich",
+            "Student Housing",
+            "Netherlands · UvA",
+            "Singapore · NUS",
+            "Australia · Melbourne",
+          ].map((tag, i) => (
+            <span
+              key={i}
+              className="whitespace-nowrap rounded-full border border-border bg-surface px-4 py-1.5 text-xs font-semibold text-[#022E5B]"
+            >
+              {tag}
+            </span>
+          ))}
+        </div>
+      </div>
+
       <section id="how" className="bg-surface py-20 sm:py-24">
-        <div className="mx-auto max-w-6xl px-4 sm:px-6">
-          <SectionTitle title={text.howTitle} sub={text.howSub} />
-          <div className="mt-12 grid gap-6 md:grid-cols-3">
+        <div className="mx-auto grid max-w-6xl gap-12 px-4 sm:px-6 lg:grid-cols-12">
+          <div className="lg:col-span-5 lg:sticky lg:top-28 lg:self-start">
+            <SectionTitle eyebrow={lang === "en" ? "Process" : "Процесс"} title={text.howTitle} sub={text.howSub} />
+          </div>
+          <div className="divide-y divide-border rounded-3xl border border-border bg-card shadow-soft lg:col-span-7">
             {text.steps.map((step, index) => {
               const Icon = stepIcons[index];
               return (
-                <div key={step.t} className="rounded-3xl border border-border bg-card p-7 shadow-soft transition-transform hover:-translate-y-1">
-                  <div className="flex items-center justify-between">
-                    <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-accent text-accent-foreground">
-                      <Icon className="h-6 w-6" />
-                    </span>
-                    <span className="font-display text-3xl font-bold text-border">0{index + 1}</span>
+                <Reveal key={step.t} delay={index * 90} className="flex items-start gap-5 p-7 transition-colors hover:bg-surface/60">
+                  <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-accent text-[#022E5B]">
+                    <Icon className="h-6 w-6" />
+                  </span>
+                  <div className="flex-1">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-lg font-bold">{step.t}</h3>
+                      <span className="font-display text-sm font-bold text-[#499BED]">0{index + 1}</span>
+                    </div>
+                    <p className="mt-2 text-sm text-muted-foreground">{step.d}</p>
                   </div>
-                  <h3 className="mt-5 text-lg font-bold">{step.t}</h3>
-                  <p className="mt-2 text-sm text-muted-foreground">{step.d}</p>
-                </div>
+                </Reveal>
               );
             })}
           </div>
@@ -373,19 +631,19 @@ export default function App() {
 
       <section id="universities" className="py-20 sm:py-24">
         <div className="mx-auto max-w-6xl px-4 sm:px-6">
-          <SectionTitle title={text.unisTitle} sub={text.unisSub} />
+          <SectionTitle eyebrow={lang === "en" ? "Verified Catalog" : "Проверенные вузы"} title={text.unisTitle} sub={text.unisSub} />
           <div className="mt-12 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-            {universities.map((uni) => {
+            {universities.map((uni, idx) => {
               const fit = catalogFit(form, uni);
               return (
+              <Reveal key={uni.id} delay={(idx % 3) * 80}>
               <button
-                key={uni.id}
                 onClick={() => setSelected(uni)}
-                className="group overflow-hidden rounded-3xl border border-border bg-card text-left shadow-soft transition-all hover:-translate-y-1.5 hover:shadow-card"
+                className="group w-full overflow-hidden rounded-3xl border border-border bg-card text-left shadow-soft transition-all hover:-translate-y-1.5 hover:border-[#499BED]/60 hover:shadow-card"
               >
                 <div className="relative aspect-[4/3] overflow-hidden">
                   {fit && (
-                    <span className="absolute left-3 top-3 z-10 rounded-full bg-background/90 px-3 py-1 text-xs font-bold text-brand shadow-soft">
+                    <span className="absolute left-3 top-3 z-10 rounded-full bg-background/95 px-3 py-1 text-xs font-bold text-brand shadow-soft">
                       {text.ai.fits[fit]}
                     </span>
                   )}
@@ -402,7 +660,7 @@ export default function App() {
                   <div>
                     <h3 className="text-base font-bold">{uni.name}</h3>
                     <p className="mt-1 flex items-center gap-1.5 text-sm text-muted-foreground">
-                      <MapPin className="h-3.5 w-3.5" /> {uni.country[lang]}
+                      <MapPin className="h-3.5 w-3.5 text-[#499BED]" /> {uni.country[lang]}
                     </p>
                   </div>
                   <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-secondary text-secondary-foreground transition-colors group-hover:bg-brand group-hover:text-brand-foreground">
@@ -410,6 +668,7 @@ export default function App() {
                   </span>
                 </div>
               </button>
+              </Reveal>
               );
             })}
           </div>
@@ -418,10 +677,27 @@ export default function App() {
 
       <section id="pricing" className="bg-surface py-20 sm:py-24">
         <div className="mx-auto max-w-6xl px-4 sm:px-6">
-          <SectionTitle title={text.pricingTitle} sub={text.pricingSub} />
-          <div className="mt-12 grid gap-6 lg:grid-cols-3">
+          <SectionTitle eyebrow={lang === "en" ? "Plans" : "Тарифы"} title={text.pricingTitle} sub={text.pricingSub} />
+          {checkoutStatus === "success" && (
+            <div className="mx-auto mt-8 max-w-4xl rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-center">
+              <p className="font-semibold text-emerald-700 dark:text-emerald-300">{text.checkout.successTitle}</p>
+              <p className="mt-1 text-sm text-muted-foreground">{text.checkout.successSub}</p>
+            </div>
+          )}
+          {checkoutStatus === "cancelled" && (
+            <div className="mx-auto mt-8 max-w-4xl rounded-2xl border border-border bg-card p-4 text-center text-sm text-muted-foreground">
+              {text.checkout.cancelled}
+            </div>
+          )}
+          {checkoutStatus === "error" && (
+            <div className="mx-auto mt-8 max-w-4xl rounded-2xl border border-destructive/30 bg-destructive/10 p-4 text-center text-sm text-destructive">
+              {checkoutError || text.checkout.error}
+            </div>
+          )}
+          <div className="mx-auto mt-12 grid max-w-4xl gap-6 lg:grid-cols-2">
             {text.plans.map((plan, index) => {
               const featured = index === 1;
+              const isLoading = featured && checkoutStatus === "loading";
               return (
                 <div
                   key={plan.n}
@@ -450,12 +726,14 @@ export default function App() {
                     ))}
                   </ul>
                   <button
-                    onClick={() => go("match")}
-                    className={`mt-8 rounded-full px-5 py-3 text-sm font-semibold transition-transform hover:-translate-y-0.5 ${
+                    onClick={featured ? startProCheckout : () => go("match")}
+                    disabled={isLoading}
+                    className={`mt-8 flex items-center justify-center gap-2 rounded-full px-5 py-3 text-sm font-semibold transition-transform hover:-translate-y-0.5 disabled:opacity-70 ${
                       featured ? "bg-sky-accent text-brand" : "bg-brand text-brand-foreground"
                     }`}
                   >
-                    {plan.b}
+                    {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
+                    {isLoading ? text.checkout.loading : featured && isPro ? text.checkout.proActiveBtn : plan.b}
                   </button>
                 </div>
               );
@@ -475,6 +753,8 @@ export default function App() {
                 busy={busy}
                 extraError={extraError}
                 saved={saved}
+                isPro={isPro}
+                onUpgrade={() => go("pricing")}
                 onReset={() => {
                   setStatus("idle");
                   setResult(null);
@@ -496,7 +776,18 @@ export default function App() {
                 <Field label={text.fields.budget} name="budget" value={form.budget} onChange={updateField} placeholder="$20,000" />
                 <SelectField label={text.fields.priority} name="priority" value={form.priority} onChange={updateField} options={text.fields.priorityOptions} />
                 {error && (
-                  <p className="rounded-2xl border border-destructive/40 px-4 py-3 text-sm text-destructive sm:col-span-2">{error}</p>
+                  <div className="rounded-2xl border border-destructive/40 px-4 py-3 text-sm text-destructive sm:col-span-2">
+                    <p>{error}</p>
+                    {!isPro && freeUsed >= 1 && (
+                      <button
+                        type="button"
+                        onClick={() => go("pricing")}
+                        className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-brand px-4 py-1.5 text-xs font-semibold text-brand-foreground"
+                      >
+                        <Sparkles className="h-3.5 w-3.5" /> {text.checkout.upgradeBtn}
+                      </button>
+                    )}
+                  </div>
                 )}
                 <div className="sm:col-span-2">
                   <button
@@ -624,16 +915,54 @@ export default function App() {
       {checklist && (
         <ChecklistModal text={text} checklist={checklist} onDownload={downloadChecklist} onClose={() => setChecklist(null)} />
       )}
+      </>
+      )}
+      {authMode && (
+        <AuthModal
+          lang={lang}
+          initialMode={authMode}
+          onClose={() => {
+            setAuthMode(null);
+            setPendingCheckout(false);
+          }}
+          onSuccess={(authedUser) => {
+            setUser(authedUser);
+            setAuthMode(null);
+            if (pendingCheckout && !authedUser.isPremium) {
+              setPendingCheckout(false);
+              apiFetch("/api/checkout", { method: "POST" })
+                .then((d) => {
+                  if (d.url) window.location.href = d.url;
+                })
+                .catch(() => {});
+            } else {
+              setPendingCheckout(false);
+              setViewMode("workspace");
+            }
+          }}
+        />
+      )}
     </div>
   );
 }
 
-function SectionTitle({ title, sub }) {
+function SectionTitle({ eyebrow, title, sub }) {
+  const words = String(title || "").split(" ");
+  const last = words.length > 1 ? words.pop() : "";
   return (
-    <div className="max-w-2xl">
-      <h2 className="text-3xl font-extrabold sm:text-4xl">{title}</h2>
+    <Reveal className="max-w-2xl">
+      {eyebrow && (
+        <div className="mb-3 flex items-center gap-2.5 text-[11px] font-bold uppercase tracking-[0.14em] text-[#499BED]">
+          <span className="h-px w-6 bg-[#499BED]" />
+          <span>{eyebrow}</span>
+        </div>
+      )}
+      <h2 className="text-3xl font-extrabold sm:text-4xl">
+        {words.join(" ")}{" "}
+        {last && <span className="font-serif-italic text-[1.12em] font-normal text-[#499BED]">{last}</span>}
+      </h2>
       {sub && <p className="mt-3 text-muted-foreground">{sub}</p>}
-    </div>
+    </Reveal>
   );
 }
 
@@ -675,12 +1004,13 @@ function Field({ label, name, type = "text", placeholder, required, value, onCha
   );
 }
 
-function MatchResults({ text, result, busy, extraError, saved, onReset, onRefine, onToggleSave, onChecklist }) {
+function MatchResults({ text, result, busy, extraError, saved, isPro, onUpgrade, onReset, onRefine, onToggleSave, onChecklist }) {
   const refinements = [
     ["cheaper", text.ai.cheaper],
     ["europe", text.ai.europe],
     ["no-reach", text.ai.noReach],
   ];
+  const visibleUniversities = isPro ? result.universities : result.universities.slice(0, 3);
   return (
     <div>
       <div className="flex flex-col items-center text-center">
@@ -697,15 +1027,16 @@ function MatchResults({ text, result, busy, extraError, saved, onReset, onRefine
             type="button"
             disabled={Boolean(busy)}
             onClick={() => onRefine(kind)}
-            className="rounded-full border border-border px-4 py-2 text-sm font-semibold hover:bg-secondary disabled:opacity-60"
+            className="inline-flex items-center gap-1.5 rounded-full border border-border px-4 py-2 text-sm font-semibold hover:bg-secondary disabled:opacity-60"
           >
+            {!isPro && <Lock className="h-3.5 w-3.5 text-muted-foreground" />}
             {busy === kind ? text.ai.refining : label}
           </button>
         ))}
       </div>
       {extraError && <p className="mt-4 rounded-2xl border border-destructive/40 px-4 py-3 text-sm text-destructive">{extraError}</p>}
       <div className="mt-8 grid gap-5">
-        {result.universities.map((uni) => {
+        {visibleUniversities.map((uni) => {
           const image = imageForUniversity(`${uni.name} ${uni.city}`);
           const kept = saved.some((item) => item.name === uni.name);
           return (
@@ -745,7 +1076,12 @@ function MatchResults({ text, result, busy, extraError, saved, onReset, onRefine
                   {uni.gpa && <Fact label={text.modal.gpa} value={uni.gpa} />}
                   {uni.tests && <Fact label={text.modal.tests} value={uni.tests} />}
                   {uni.tuition && <Fact label={text.modal.tuition} value={uni.tuition} />}
-                  {uni.scholarships && <Fact label={text.modal.scholarships} value={uni.scholarships} />}
+                  {uni.scholarships && (
+                    <Fact
+                      label={text.modal.scholarships}
+                      value={isPro ? uni.scholarships : text.checkout.proOnlyFeature}
+                    />
+                  )}
                   {uni.nextStep && <Fact label={text.ai.next} value={uni.nextStep} />}
                 </div>
                 {uni.requirements?.length > 0 && (
@@ -766,7 +1102,7 @@ function MatchResults({ text, result, busy, extraError, saved, onReset, onRefine
                 )}
                 <div className="mt-5 flex flex-wrap gap-2">
                   <button type="button" onClick={() => onToggleSave(uni)} className="inline-flex items-center gap-1.5 rounded-full border border-border px-4 py-2 text-sm font-semibold hover:bg-secondary">
-                    <Bookmark className="h-4 w-4" /> {kept ? text.ai.saved : text.ai.save}
+                    {isPro ? <Bookmark className="h-4 w-4" /> : <Lock className="h-4 w-4 text-muted-foreground" />} {kept ? text.ai.saved : text.ai.save}
                   </button>
                   <button
                     type="button"
@@ -774,7 +1110,7 @@ function MatchResults({ text, result, busy, extraError, saved, onReset, onRefine
                     onClick={() => onChecklist(uni)}
                     className="inline-flex items-center gap-1.5 rounded-full bg-brand px-4 py-2 text-sm font-semibold text-brand-foreground disabled:opacity-60"
                   >
-                    <ListChecks className="h-4 w-4" /> {busy === `check:${uni.name}` ? text.ai.checklistLoading : text.ai.checklist}
+                    {isPro ? <ListChecks className="h-4 w-4" /> : <Lock className="h-4 w-4" />} {busy === `check:${uni.name}` ? text.ai.checklistLoading : text.ai.checklist}
                   </button>
                 </div>
               </div>
@@ -782,6 +1118,18 @@ function MatchResults({ text, result, busy, extraError, saved, onReset, onRefine
           );
         })}
       </div>
+      {!isPro && (
+        <div className="mt-6 rounded-2xl border border-brand/20 bg-accent/40 p-5 text-center">
+          <p className="text-sm font-medium">{text.checkout.lockedResultsNote}</p>
+          <button
+            type="button"
+            onClick={onUpgrade}
+            className="mt-3 inline-flex items-center gap-2 rounded-full bg-brand px-5 py-2.5 text-sm font-semibold text-brand-foreground"
+          >
+            <Sparkles className="h-4 w-4" /> {text.checkout.upgradeBtn}
+          </button>
+        </div>
+      )}
       <p className="mt-6 text-center text-xs text-muted-foreground">{text.ai.disclaimer}</p>
       <div className="mt-6 text-center">
         <button onClick={onReset} className="rounded-full border border-border px-5 py-2.5 text-sm font-semibold hover:bg-secondary">

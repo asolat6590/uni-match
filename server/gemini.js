@@ -459,3 +459,73 @@ export async function handleMatch(req, res, env) {
     );
   }
 }
+
+const ESSAY_COACH_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    brainstorming: { type: "ARRAY", items: { type: "STRING" } },
+    structure: { type: "STRING" },
+    clarity: { type: "STRING" },
+    grammar: { type: "STRING" },
+    specificity: { type: "STRING" },
+    promptAlignment: { type: "STRING" },
+    weaknesses: { type: "ARRAY", items: { type: "STRING" } },
+    nextSteps: { type: "ARRAY", items: { type: "STRING" } },
+  },
+  required: ["brainstorming", "structure", "clarity", "grammar", "specificity", "promptAlignment", "weaknesses", "nextSteps"],
+};
+
+export async function coachEssay(body = {}, env = {}) {
+  const lang = body.lang === "en" ? "en" : "ru";
+  const t = messages[lang];
+  const apiKey = env.GEMINI_API_KEY;
+  if (!apiKey) throw fail(500, "missing_key", t.missingKey);
+
+  const model = text(env.GEMINI_MODEL || "gemini-2.5-flash", 80) || "gemini-2.5-flash";
+  const draft = String(body.content || "").trim().slice(0, 6000);
+  const promptText = text(body.prompt || "", 600);
+  const university = text(body.universityName || "", 160);
+  const focus = text(body.focus || "full review", 80);
+
+  if (draft.length < 20 && !promptText) {
+    throw fail(400, "invalid", lang === "en" ? "Enter an essay prompt or at least 20 characters of your draft." : "Укажи тему эссе или хотя бы 20 символов черновика.");
+  }
+
+  const instruction =
+    lang === "en"
+      ? "You are an ethical university admissions essay coach. NEVER write or rewrite the student's full personal statement for them. Only provide constructive coaching on brainstorming angles, structure, clarity, grammar patterns, specificity, prompt alignment, weaknesses, and concrete next revision steps. Respond in English."
+      : "Ты этичный коуч по вступительным эссе. НИКОГДА не пиши и не переписывай всё мотивационное письмо за студента. Давай только конструктивный разбор: идеи для брейншторма, структуру, ясность, грамматику, конкретику, соответствие вопросу, слабые места и следующие шаги по доработке. Отвечай на русском языке.";
+
+  const userMsg = [
+    university ? `Target university: ${university}` : "",
+    promptText ? `Essay prompt: ${promptText}` : "",
+    `Coaching focus: ${focus}`,
+    draft ? `Student draft:\n${draft}` : "Student has not written a draft yet; focus on brainstorming and structure.",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: instruction }] },
+        contents: [{ role: "user", parts: [{ text: userMsg }] }],
+        generationConfig: {
+          temperature: 0.4,
+          responseMimeType: "application/json",
+          responseSchema: ESSAY_COACH_SCHEMA,
+        },
+      }),
+    },
+  );
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw fail(502, "gemini_error", payload?.error?.message || t.failed);
+  }
+  const raw = payload?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+  return parseModelText(raw);
+}

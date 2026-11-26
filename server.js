@@ -3,7 +3,7 @@ import { createReadStream, existsSync, readFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { handleMatch } from "./server/gemini.js";
+import { routeApi } from "./server/router.js";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const dist = path.join(root, "dist");
@@ -50,9 +50,9 @@ function safeFile(urlPath) {
 const port = Number(process.env.PORT) || 4173;
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
-  if (url.pathname === "/api/match") {
-    handleMatch(req, res, process.env);
-    return;
+  if (url.pathname.startsWith("/api/")) {
+    const handled = await routeApi(req, res, process.env);
+    if (handled) return;
   }
 
   let filePath = safeFile(url.pathname) || path.join(dist, "index.html");

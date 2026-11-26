@@ -3,6 +3,7 @@
 @theme inline {
   --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
   --font-display: "Sora", ui-sans-serif, system-ui, sans-serif;
+  --font-serif-accent: "Instrument Serif", Georgia, serif;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-surface: var(--surface);
@@ -26,8 +27,8 @@
   --radius-xl: 1.25rem;
   --radius-2xl: 1.5rem;
   --radius-3xl: 1.75rem;
-  --shadow-soft: 0 12px 32px -18px oklch(28% 0.12 264 / 0.45);
-  --shadow-card: 0 22px 50px -28px oklch(28% 0.12 264 / 0.5);
+  --shadow-soft: 0 12px 32px -18px rgba(3, 23, 37, 0.25);
+  --shadow-card: 0 24px 54px -26px rgba(2, 46, 91, 0.35);
 }
 
 @utility bg-hero-gradient {
@@ -35,33 +36,34 @@
 }
 
 :root {
-  --background: oklch(100% 0 0);
-  --surface: oklch(97.5% 0.008 250);
-  --foreground: oklch(24% 0.06 265);
-  --card: oklch(100% 0 0);
-  --primary: oklch(32% 0.11 264);
-  --primary-foreground: oklch(99% 0.005 250);
-  --brand: oklch(28% 0.12 264);
-  --brand-foreground: oklch(99% 0.005 250);
-  --sky-accent: oklch(75% 0.13 232);
-  --mint-accent: oklch(83% 0.11 175);
-  --secondary: oklch(95.5% 0.014 245);
-  --secondary-foreground: oklch(32% 0.11 264);
-  --muted: oklch(96.5% 0.01 247);
-  --muted-foreground: oklch(55% 0.035 258);
-  --accent: oklch(93% 0.045 232);
-  --accent-foreground: oklch(28% 0.12 264);
-  --gradient-hero: linear-gradient(140deg, oklch(24% 0.11 264), oklch(34% 0.13 258) 55%, oklch(45% 0.12 232));
-  --destructive: oklch(57.7% 0.245 27.325);
-  --border: oklch(92.9% 0.013 255.508);
-  --input: oklch(92.9% 0.013 255.508);
-  --ring: oklch(70.4% 0.04 256.788);
+  /* Custom 5-shade palette: #031725, #022E5B, #499BED, #A1C6F6, #DAEAFF */
+  --background: #ffffff;
+  --surface: #f4f8ff;
+  --foreground: #031725;
+  --card: #ffffff;
+  --primary: #022e5b;
+  --primary-foreground: #ffffff;
+  --brand: #022e5b;
+  --brand-foreground: #ffffff;
+  --sky-accent: #499bed;
+  --mint-accent: #a1c6f6;
+  --secondary: #daeaff;
+  --secondary-foreground: #022e5b;
+  --muted: #eef5ff;
+  --muted-foreground: #46607a;
+  --accent: #daeaff;
+  --accent-foreground: #022e5b;
+  --gradient-hero: linear-gradient(150deg, #031725 0%, #022e5b 58%, #165594 100%);
+  --destructive: #d9383a;
+  --border: #d5e4f8;
+  --input: #c9ddf7;
+  --ring: #499bed;
 }
 
 @layer base {
   html {
     scroll-behavior: smooth;
-    scroll-padding-top: 5rem;
+    scroll-padding-top: 5.5rem;
   }
 
   body {
@@ -77,6 +79,65 @@
   h3,
   h4 {
     font-family: var(--font-display);
-    letter-spacing: -0.02em;
+    letter-spacing: -0.025em;
   }
+}
+
+.font-serif-italic {
+  font-family: var(--font-serif-accent);
+  font-style: italic;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+}
+
+/* Kelvora-inspired smooth blur-to-sharp scroll reveal */
+.reveal {
+  opacity: 0;
+  filter: blur(8px);
+  transform: translateY(22px);
+  transition:
+    opacity 0.75s cubic-bezier(0.22, 1, 0.36, 1),
+    filter 0.75s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 0.75s cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: opacity, filter, transform;
+}
+
+.reveal-visible {
+  opacity: 1;
+  filter: blur(0);
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal {
+    opacity: 1;
+    filter: none;
+    transform: none;
+    transition: none;
+  }
+}
+
+/* Archio-inspired infinite marquee pill strip */
+@keyframes marquee-scroll {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+.animate-marquee {
+  display: flex;
+  width: max-content;
+  animation: marquee-scroll 34s linear infinite;
+}
+
+.animate-marquee:hover {
+  animation-play-state: paused;
+}
+
+.mask-fade-x {
+  mask-image: linear-gradient(to right, transparent, black 10%, black 90%, transparent);
+  -webkit-mask-image: linear-gradient(to right, transparent, black 10%, black 90%, transparent);
 }
