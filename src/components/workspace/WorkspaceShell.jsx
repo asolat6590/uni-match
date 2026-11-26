@@ -45,29 +45,7 @@ export default function WorkspaceShell({ lang, user, activeTab, onTabChange, onR
     refreshDashboard();
   }, [user?.isPremium, lang]);
 
-  if (!user) {
-    return (
-      <section className="mx-auto max-w-3xl px-4 py-24 text-center">
-        <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-accent text-accent-foreground">
-          <Lock className="h-6 w-6" />
-        </span>
-        <h2 className="mt-5 text-3xl font-extrabold">{isEn ? "Sign in to open UniMatch Workspace" : "Войди, чтобы открыть кабинет UniMatch"}</h2>
-        <p className="mt-3 text-sm text-muted-foreground">
-          {isEn ? "Your applications, deadlines, essays, and Stripe subscription are stored securely per account." : "Твои заявки, дедлайны, эссе и подписка Stripe надёжно привязаны к аккаунту."}
-        </p>
-        <div className="mt-6 flex justify-center gap-3">
-          <button onClick={onRequireAuth} className="rounded-full bg-brand px-6 py-3 text-sm font-semibold text-brand-foreground">
-            {isEn ? "Sign in / Register" : "Войти / Регистрация"}
-          </button>
-          <button onClick={onBackToSite} className="rounded-full border border-border px-6 py-3 text-sm font-semibold">
-            {isEn ? "Back to site" : "На главную"}
-          </button>
-        </div>
-      </section>
-    );
-  }
-
-  if (!user.isPremium) {
+  if (!user?.isPremium) {
     return (
       <section className="mx-auto max-w-3xl px-4 py-24 text-center">
         <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-accent text-accent-foreground">

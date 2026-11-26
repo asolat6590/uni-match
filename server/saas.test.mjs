@@ -43,9 +43,9 @@ describe("UniMatch Premium SaaS", () => {
   });
 
   it("enforces auth, Free vs Premium gating, and strict per-user data isolation", async () => {
-    // Unauthenticated workspace access -> 401
+    // Unauthenticated workspace access -> 403
     const unauth = await req("/api/workspace/dashboard");
-    assert.equal(unauth.status, 401);
+    assert.equal(unauth.status, 403);
 
     // Register User A (Free)
     const regA = await req("/api/auth/register", {

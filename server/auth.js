@@ -103,7 +103,18 @@ function clearSessionCookie(res) {
 }
 
 export function issueSessionForUser(res, env, user) {
-  const token = signToken({ uid: user.id, exp: Date.now() + SESSION_TTL_MS }, getSecret(env));
+  const isPro = ["active", "trialing"].includes(user.subscriptionStatus);
+  const token = signToken(
+    {
+      uid: user.id,
+      pro: isPro,
+      subId: user.stripeSubscriptionId || null,
+      email: user.email || "",
+      name: user.name || "UniMatch Pro",
+      exp: Date.now() + SESSION_TTL_MS,
+    },
+    getSecret(env),
+  );
   setSessionCookie(res, token);
 }
 
@@ -128,13 +139,28 @@ export function getSessionUser(req, env) {
   if (!token) return null;
   const payload = verifyToken(token, getSecret(env));
   if (!payload) return null;
-  return findUserById(payload.uid);
+  const existing = findUserById(payload.uid);
+  if (existing) return existing;
+  // Re-hydrate user from signed cookie across stateless serverless instances
+  return createUser({
+    id: payload.uid,
+    email: payload.email || `${payload.uid}@unimatch.study`,
+    name: payload.name || "UniMatch Pro",
+    passwordHash: "",
+    subscriptionStatus: payload.pro ? "active" : "none",
+    stripeCustomerId: null,
+    stripeSubscriptionId: payload.subId || null,
+    freeMatchesUsed: 0,
+    profile: {},
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
 }
 
 export function requireUser(req, res, env) {
   const user = getSessionUser(req, env);
   if (!user) {
-    sendJson(res, 401, { error: "unauthorized", message: "Please sign in to continue." });
+    sendJson(res, 403, { error: "premium_required", message: "Active UniMatch Pro subscription required." });
     return null;
   }
   return user;

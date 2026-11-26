@@ -120,7 +120,18 @@ export default function App() {
   useEffect(() => {
     apiFetch("/api/billing/status")
       .then((data) => {
-        if (data?.user) setUser(data.user);
+        if (data?.user) {
+          setUser(data.user);
+          return;
+        }
+        const savedSession = localStorage.getItem("unimatch_stripe_session");
+        if (savedSession) {
+          apiFetch(`/api/checkout-status?session_id=${encodeURIComponent(savedSession)}`)
+            .then((res) => {
+              if (res?.paid && res?.user) setUser(res.user);
+            })
+            .catch(() => {});
+        }
       })
       .catch(() => {});
   }, []);
@@ -147,6 +158,7 @@ export default function App() {
         .then((data) => {
           if (!active) return;
           if (data?.paid && data?.user) {
+            localStorage.setItem("unimatch_stripe_session", sessionId);
             setUser(data.user);
             setCheckoutStatus("success");
           } else {
@@ -400,22 +412,6 @@ export default function App() {
                 ? lang === "en" ? "Landing" : "Главная"
                 : lang === "en" ? "Workspace" : "Кабинет"}
             </button>
-            {user ? (
-              <button
-                onClick={logout}
-                title={user.email}
-                className="hidden items-center gap-1.5 rounded-full border border-border px-3 py-2 text-xs font-semibold text-muted-foreground hover:text-foreground md:inline-flex"
-              >
-                <LogOut className="h-3.5 w-3.5" /> {user.name.split(" ")[0]}
-              </button>
-            ) : (
-              <button
-                onClick={() => setAuthMode("login")}
-                className="hidden rounded-full border border-border px-3.5 py-2 text-xs font-semibold hover:bg-secondary md:inline-flex"
-              >
-                {lang === "en" ? "Sign in" : "Войти"}
-              </button>
-            )}
             <button
               onClick={() => go("match")}
               className="hidden rounded-full bg-brand px-4 py-2 text-sm font-semibold text-brand-foreground shadow-soft transition-transform hover:-translate-y-0.5 md:inline-flex"
@@ -469,15 +465,6 @@ export default function App() {
                   ? lang === "en" ? "Landing" : "Главная"
                   : lang === "en" ? "Workspace" : "Кабинет"}
               </button>
-              {user ? (
-                <button onClick={() => { setMenuOpen(false); logout(); }} className="rounded-full border border-border px-3.5 py-2 text-xs font-semibold">
-                  {lang === "en" ? "Sign out" : "Выйти"}
-                </button>
-              ) : (
-                <button onClick={() => { setMenuOpen(false); setAuthMode("login"); }} className="rounded-full border border-border px-3.5 py-2 text-xs font-semibold">
-                  {lang === "en" ? "Sign in" : "Войти"}
-                </button>
-              )}
               <button
                 onClick={() => go("match")}
                 className="flex-1 rounded-full bg-brand px-4 py-2.5 text-sm font-semibold text-brand-foreground"
