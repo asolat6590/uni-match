@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
-import { findUserById, loadDb, updateUser } from "./db.js";
-import { getSessionUser, publicUser, requireUser, sendJson } from "./auth.js";
+import { createUser, findUserByEmail, findUserById, loadDb, newId, updateUser } from "./db.js";
+import { getSessionUser, issueSessionForUser, publicUser, sendJson } from "./auth.js";
 
 const STRIPE_API = "https://api.stripe.com/v1";
 
@@ -45,12 +45,14 @@ export async function createCheckoutSession(req, env, user) {
     "line_items[0][quantity]": "1",
     success_url: `${origin}/?checkout=success&session_id={CHECKOUT_SESSION_ID}#pricing`,
     cancel_url: `${origin}/?checkout=cancelled#pricing`,
-    client_reference_id: user.id,
-    "metadata[userId]": user.id,
   };
-  if (user.stripeCustomerId) {
+  if (user?.id) {
+    fields.client_reference_id = user.id;
+    fields["metadata[userId]"] = user.id;
+  }
+  if (user?.stripeCustomerId) {
     fields.customer = user.stripeCustomerId;
-  } else if (user.email) {
+  } else if (user?.email) {
     fields.customer_email = user.email;
   }
 
@@ -67,7 +69,7 @@ export async function createCheckoutSession(req, env, user) {
   return { id: session.id, url: session.url };
 }
 
-export async function syncSessionForUser(sessionId, env, user) {
+export async function syncSessionForUser(sessionId, env, currentUser, res) {
   if (!sessionId || !sessionId.startsWith("cs_")) {
     throw Object.assign(new Error("Invalid session_id"), { status: 400, code: "invalid_session" });
   }
@@ -77,27 +79,61 @@ export async function syncSessionForUser(sessionId, env, user) {
     env.STRIPE_SECRET_KEY,
   );
 
-  if (session.client_reference_id && session.client_reference_id !== user.id) {
+  if (currentUser && session.client_reference_id && session.client_reference_id !== currentUser.id) {
     throw Object.assign(new Error("Session does not belong to current user"), { status: 403, code: "forbidden" });
   }
 
   const paid = session.status === "complete" || session.payment_status === "paid";
   const subObj = session.subscription && typeof session.subscription === "object" ? session.subscription : null;
   const subId = subObj?.id || (typeof session.subscription === "string" ? session.subscription : null);
-  const subStatus = subObj?.status || (paid ? "active" : user.subscriptionStatus || "none");
+  const subStatus = subObj?.status || (paid ? "active" : "none");
+  const stripeEmail = (session.customer_details?.email || session.customer_email || "").trim().toLowerCase();
+  const stripeName = session.customer_details?.name || (stripeEmail ? stripeEmail.split("@")[0] : "UniMatch Pro");
 
-  const updated = updateUser(user.id, {
-    stripeCustomerId: typeof session.customer === "string" ? session.customer : user.stripeCustomerId,
-    stripeSubscriptionId: subId || user.stripeSubscriptionId,
-    subscriptionStatus: paid ? subStatus : user.subscriptionStatus || "none",
-  });
+  let targetUser = currentUser;
+  if (!targetUser && paid) {
+    if (session.client_reference_id) {
+      targetUser = findUserById(session.client_reference_id);
+    }
+    if (!targetUser && stripeEmail) {
+      targetUser = findUserByEmail(stripeEmail);
+    }
+    if (!targetUser) {
+      targetUser = createUser({
+        id: newId("usr"),
+        email: stripeEmail || `pro_${newId("u")}@unimatch.study`,
+        name: stripeName,
+        passwordHash: "",
+        subscriptionStatus: subStatus,
+        stripeCustomerId: typeof session.customer === "string" ? session.customer : null,
+        stripeSubscriptionId: subId || null,
+        freeMatchesUsed: 0,
+        profile: {},
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+    }
+  }
+
+  let updated = targetUser;
+  if (targetUser) {
+    updated = updateUser(targetUser.id, {
+      stripeCustomerId: typeof session.customer === "string" ? session.customer : targetUser.stripeCustomerId,
+      stripeSubscriptionId: subId || targetUser.stripeSubscriptionId,
+      subscriptionStatus: paid ? subStatus : targetUser.subscriptionStatus || "none",
+    }) || targetUser;
+
+    if (paid && res) {
+      issueSessionForUser(res, env, updated);
+    }
+  }
 
   return {
     paid,
     status: session.status,
     paymentStatus: session.payment_status,
-    customerEmail: session.customer_details?.email || session.customer_email || null,
-    user: publicUser(updated || user),
+    customerEmail: stripeEmail || null,
+    user: publicUser(updated),
   };
 }
 
@@ -118,8 +154,7 @@ export async function handleCheckout(req, res, env) {
     sendJson(res, 405, { error: "method", message: "POST only" });
     return;
   }
-  const user = requireUser(req, res, env);
-  if (!user) return;
+  const user = getSessionUser(req, env);
 
   try {
     const result = await createCheckoutSession(req, env, user);
@@ -138,13 +173,12 @@ export async function handleCheckoutStatus(req, res, env) {
     sendJson(res, 405, { error: "method", message: "GET only" });
     return;
   }
-  const user = requireUser(req, res, env);
-  if (!user) return;
+  const user = getSessionUser(req, env);
 
   try {
     const url = new URL(req.url || "/", "http://localhost");
     const sessionId = url.searchParams.get("session_id") || "";
-    const result = await syncSessionForUser(sessionId, env, user);
+    const result = await syncSessionForUser(sessionId, env, user, res);
     sendJson(res, 200, result);
   } catch (error) {
     console.error("Stripe status error:", error.message);

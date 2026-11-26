@@ -102,6 +102,11 @@ function clearSessionCookie(res) {
   res.setHeader("Set-Cookie", `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
 }
 
+export function issueSessionForUser(res, env, user) {
+  const token = signToken({ uid: user.id, exp: Date.now() + SESSION_TTL_MS }, getSecret(env));
+  setSessionCookie(res, token);
+}
+
 export function publicUser(user) {
   if (!user) return null;
   const isPremium = ["active", "trialing"].includes(user.subscriptionStatus);

@@ -330,11 +330,6 @@ export default function App() {
       setWorkspaceTab("dashboard");
       return;
     }
-    if (!user) {
-      setPendingCheckout(true);
-      setAuthMode("register");
-      return;
-    }
     setCheckoutStatus("loading");
     setCheckoutError("");
     try {
